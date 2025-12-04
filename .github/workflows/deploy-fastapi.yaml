@@ -2,7 +2,7 @@ name: deploy_fastapi
 
 on:
   push:
-    branches: ["main","fastapi"]
+    branches: ["master","fastapi"]
 jobs:
   deploy:
     runs-on: ubuntu-latest
