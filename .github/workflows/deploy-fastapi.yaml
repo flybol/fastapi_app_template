@@ -1,0 +1,119 @@
+name: deploy_fastapi
+
+on:
+  push:
+    branches: ["main","fastapi"]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      PYTHON_VERSION: "3.10"        # CI 环境 Python 版本（建议与服务器一致）
+      SERVICE_NAME: "fastapi-app-template"   # systemd 里你的服务名：fastapi-app-template.service
+
+    steps:
+      # 1. 拉取代码
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      # 2. 安装基础 Python（给 uv 用，也方便本地调试）
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      # 3. 使用 uv 安装依赖（CI 环境）
+      - name: Install dependencies with uv
+        run: |
+          if [ -f pyproject.toml ]; then
+            # 有锁文件就用 --frozen，避免 CI 和本地依赖不一致
+            if [ -f uv.lock ] || [ -f pyproject.lock ]; then
+              uv sync --frozen
+            else
+              uv sync
+            fi
+          else
+            echo "pyproject.toml not found. uv 模式要求使用 pyproject 管理依赖。" && exit 1
+          fi
+
+      # 4. 运行测试
+      - name: Run tests
+        run: |
+          if [ -f pytest.ini ] || [ -d tests ]; then
+            uv run pytest
+          else
+            echo "No tests found, skip."
+          fi
+
+      # 5. 配置 SSH（写入私钥 + known_hosts）
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan $SSH_HOST >> ~/.ssh/known_hosts
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+
+      # 7. 使用 rsync 同步代码到服务器
+      - name: Rsync code to server
+        run: |
+          rsync -avz --delete \
+            --exclude ".git" \
+            --exclude ".github" \
+            --exclude "__pycache__" \
+            --exclude ".venv" \
+            --exclude ".idea" \
+            --exclude ".pytest_cache" \
+            ./ \
+            $SSH_USER@$SSH_HOST:$SSH_TARGET_DIR
+        env:
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_TARGET_DIR: ${{ secrets.SSH_TARGET_DIR }}
+
+      # 8. 远程部署：安装/更新 uv，uv sync，迁移数据库，重启 systemd 服务
+      - name: Remote deploy with uv
+        env:
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_TARGET_DIR: ${{ secrets.SSH_TARGET_DIR }}
+          SERVICE_NAME: ${{ env.SERVICE_NAME }}
+        run: |
+          ssh $SSH_USER@$SSH_HOST << EOF
+          set -e
+
+          echo ">>> 设置 PATH，确保 uv 在 PATH 中"
+          export PATH="\$HOME/.local/bin:\$PATH"
+
+          echo ">>> 检查 uv 是否已安装，如未安装则安装"
+          if ! command -v uv >/dev/null 2>&1; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="\$HOME/.local/bin:\$PATH"
+          fi
+
+          echo ">>> 切换到项目目录：$SSH_TARGET_DIR"
+          cd "$SSH_TARGET_DIR"
+
+          echo ">>> 使用 uv 同步依赖（生产环境可不安装 dev 依赖）"
+          if [ -f uv.lock ] || [ -f pyproject.lock ]; then
+            uv sync --frozen --no-dev
+          else
+            uv sync --no-dev
+          fi
+
+          echo ">>> 如果有数据库迁移（例如 alembic），在这里执行"
+          if [ -f alembic.ini ]; then
+            uv run alembic upgrade head
+          else
+            echo "alembic.ini not found, skip migrations."
+          fi
+
+          echo ">>> 重启 systemd 服务：${SERVICE_NAME}.service"
+          sudo systemctl daemon-reload
+          sudo systemctl restart ${SERVICE_NAME}.service
+
+          echo ">>> 当前服务状态（只显示，不影响流水线）"
+          sudo systemctl status ${SERVICE_NAME}.service --no-pager -l || true
+          EOF
