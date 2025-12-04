@@ -24,18 +24,16 @@ jobs:
       # 3. 安装 uv（如果未安装）
       - name: Install uv
         run: |
-          if [ -f pyproject.toml ]; then
-            # 有锁文件就用 --frozen，避免 CI 和本地依赖不一致
-            if [ -f uv.lock ] || [ -f pyproject.lock ]; then
-              uv sync --frozen
-            else
-              uv sync
-            fi
+          # 如果系统中没有 uv，则安装
+          if ! command -v uv >/dev/null 2>&1; then
+            echo "uv not found, start installing..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            # 把 uv 安装路径加到 PATH（当前 job 生效）
+            echo "$HOME/.local/bin" >> $GITHUB_PATH
           else
-            echo "pyproject.toml not found. uv 模式要求使用 pyproject 管理依赖。" && exit 1
+            echo "uv already installed at: $(command -v uv)"
           fi
-
-      # 3. 使用 uv 安装依赖（CI 环境）
+      # 4. 使用 uv 安装依赖（CI 环境）
       - name: Install dependencies with uv
         run: |
           if [ -f pyproject.toml ]; then
@@ -49,7 +47,7 @@ jobs:
             echo "pyproject.toml not found. uv 模式要求使用 pyproject 管理依赖。" && exit 1
           fi
 
-      # 4. 运行测试
+      # 5. 运行测试
       - name: Run tests
         run: |
           if [ -f pytest.ini ] || [ -d tests ]; then
@@ -58,7 +56,7 @@ jobs:
             echo "No tests found, skip."
           fi
 
-      # 5. 配置 SSH（写入私钥 + known_hosts）
+      # 6. 配置 SSH（写入私钥 + known_hosts）
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
