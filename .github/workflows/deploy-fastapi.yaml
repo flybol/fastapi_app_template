@@ -34,6 +34,7 @@ jobs:
           else
             echo "uv already installed at: $(command -v uv)"
           fi
+          
       # 4. 使用 uv 安装依赖（CI 环境）
       - name: Install dependencies with uv
         run: |
