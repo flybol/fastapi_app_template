@@ -27,7 +27,7 @@ def get_users():
     return mock_db
 
 
-@app.delete("/users/{user_id}")
+@app.delete("/users/{user_id}", summary="Delete a user")
 def remove_user(user_id: int):
     """Delete a user"""
     global mock_db
